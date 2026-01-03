@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "memory-hub": {
+      "command": "python",
+      "args": [
+        "/Users/fengjunwen/Projects/memory-hub/server.py"
+      ],
+      "env": {
+        "POSTGRES_HOST": "localhost",
+        "POSTGRES_PORT": "5632",
+        "POSTGRES_DB": "memhub",
+        "POSTGRES_USER": "postgres",
+        "POSTGRES_PASSWORD": "itsnothing"
+      }
+    }
+  }
+}
