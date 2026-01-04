@@ -8,12 +8,13 @@ from pathlib import Path
 class Settings(BaseSettings):
     """Application settings."""
 
-    # Database
-    postgres_host: str = "localhost"
-    postgres_port: int = 5632
-    postgres_db: str = "memhub"
+    # Database - InsForge Cloud
+    postgres_host: str = "5245iaat.us-west.database.insforge.app"
+    postgres_port: int = 5432
+    postgres_db: str = "insforge"
     postgres_user: str = "postgres"
     postgres_password: str = "itsnothing"
+    postgres_sslmode: str = "require"  # SSL required for InsForge
 
     # Embedding model (sentence-transformers)
     # Popular models:
@@ -44,8 +45,8 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
-        """Get database connection URL."""
-        return f"postgresql://{self.postgres_user}:{self.postgres_password}@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        """Get database connection URL with SSL."""
+        return f"postgresql://{self.postgres_user}:{self.postgres_password}@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}?sslmode={self.postgres_sslmode}"
 
 
 settings = Settings()

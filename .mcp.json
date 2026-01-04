@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "insforge": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@insforge/mcp@latest"
+      ],
+      "env": {
+        "API_KEY": "ik_32e54d3a225015650680ff0eeebe89",
+        "API_BASE_URL": "https://5245iaat.us-west.insforge.app"
+      }
+    },
+    "memory-hub": {
+      "command": "/home/sbx_1d87eaf53c26fcbd29130ebc/workspace/memory-hub/venv/bin/python",
+      "args": [
+        "/home/sbx_1d87eaf53c26fcbd29130ebc/workspace/memory-hub/server.py"
+      ],
+      "env": {
+        "MEMHUB_AUTH_TOKEN": "mhub_8f6462d49345a06d2b3196e0c752c9f8e04b349d25e047999b39e5108fcb4238",
+        "MEMHUB_HTTP_URL": "http://localhost:8001"
+      }
+    }
+  }
+}

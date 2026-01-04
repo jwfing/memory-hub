@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 """
 Hook script to automatically save Claude Code conversations to memory-hub.
-This script should be called by Claude Code hooks.
+This script calls the HTTP endpoint which includes entity and relationship extraction.
 """
 
 import sys
 import json
 import os
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Configuration
 MEMHUB_URL = os.getenv("MEMHUB_HTTP_URL", "http://localhost:8000")
 MEMHUB_TOKEN = os.getenv("MEMHUB_AUTH_TOKEN", "")
 
+
 def save_to_memhub(role: str, content: str, session_id: str = None):
-    """Save a conversation message to memory-hub."""
+    """Save a conversation message to memory-hub via HTTP API."""
 
     if not MEMHUB_TOKEN:
         print("Warning: MEMHUB_AUTH_TOKEN not set", file=sys.stderr)
@@ -23,45 +24,35 @@ def save_to_memhub(role: str, content: str, session_id: str = None):
 
     # Use current date as session_id if not provided
     if not session_id:
-        session_id = f"claude_code_{datetime.now().strftime('%Y%m%d')}"
+        session_id = f"claude_code_{datetime.now(timezone.utc).strftime('%Y%m%d')}"
 
     # Prepare the request
-    url = f"{MEMHUB_URL}/messages"
+    url = f"{MEMHUB_URL}/api/save"
     headers = {
         "Authorization": f"Bearer {MEMHUB_TOKEN}",
         "Content-Type": "application/json"
     }
 
     payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": {
-            "name": "save_conversation",
-            "arguments": {
-                "session_id": session_id,
-                "role": role,
-                "content": content,
-                "platform": "claude_code",
-                "metadata": json.dumps({
-                    "auto_saved": True,
-                    "timestamp": datetime.utcnow().isoformat()
-                })
-            }
-        }
+        "session_id": session_id,
+        "role": role,
+        "content": content,
+        "platform": "claude_code",
+        "metadata": json.dumps({
+            "auto_saved": True,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        })
     }
 
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
 
         if response.status_code == 200:
             result = response.json()
-            if "result" in result:
-                print(f"✓ Conversation saved to memory-hub", file=sys.stderr)
-                return True
-            else:
-                print(f"✗ Failed to save: {result.get('error', 'Unknown error')}", file=sys.stderr)
-                return False
+            entities = result.get("entities_extracted", 0)
+            relationships = result.get("relationships_extracted", 0)
+            print(f"✓ Saved (entities: {entities}, relationships: {relationships})", file=sys.stderr)
+            return True
         else:
             print(f"✗ HTTP {response.status_code}: {response.text}", file=sys.stderr)
             return False

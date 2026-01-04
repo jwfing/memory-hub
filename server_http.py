@@ -1005,11 +1005,153 @@ async def handle_health(request):
     })
 
 
+async def handle_save_conversation_http(request):
+    """Simple HTTP endpoint for saving conversations (for Claude Code hooks).
+    Implements the same logic as the save_conversation MCP tool including
+    entity extraction and relationship extraction.
+    """
+    from starlette.responses import JSONResponse
+
+    # Verify authentication
+    headers_dict = dict(request.scope.get("headers", []))
+    auth_header = headers_dict.get(b"authorization") or headers_dict.get(b"Authorization")
+    if not auth_header:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    token = auth_header.decode().split()[-1]
+
+    # Verify token
+    db = SessionLocal()
+    try:
+        if token.startswith("mhub_"):
+            payload = api_key_service.verify_api_key(db, token)
+        else:
+            payload = auth_service.verify_token(token)
+
+        if not payload:
+            return JSONResponse({"error": "Invalid token"}, status_code=401)
+
+        user_id = str(payload["user_id"])
+
+        # Parse request body
+        data = await request.json()
+        session_id = data.get("session_id")
+        role = data.get("role", "user")
+        content = data.get("content")
+        platform = data.get("platform", "claude_code")
+        metadata = data.get("metadata")
+
+        if not session_id or not content:
+            return JSONResponse({"error": "session_id and content are required"}, status_code=400)
+
+        # Generate embedding for content
+        embedding = embedding_service.get_embedding(content)
+
+        # Create conversation
+        conversation = Conversation(
+            user_id=user_id,
+            session_id=session_id,
+            role=role,
+            content=content,
+            platform=platform,
+            embedding=embedding,
+            extra_metadata=metadata,
+            created_at=datetime.utcnow()
+        )
+
+        db.add(conversation)
+        db.commit()
+        db.refresh(conversation)
+
+        # Extract entities and relationships from conversation (same logic as MCP tool)
+        try:
+            entities_data, relationships_data = entity_extraction_service.extract_entities(
+                text=content,
+                role=role,
+                extract_relationships=True
+            )
+
+            # Save extracted entities
+            entity_id_map = {}  # Map entity name to database ID
+            for entity_data in entities_data:
+                # Generate embedding for entity
+                entity_embedding = embedding_service.get_embedding(
+                    entity_data["description"]
+                )
+
+                entity = Entity(
+                    user_id=user_id,
+                    conversation_id=conversation.id,
+                    entity_type=entity_data["entity_type"],
+                    entity_name=entity_data["entity_name"],
+                    description=entity_data["description"],
+                    embedding=entity_embedding,
+                    created_at=datetime.utcnow()
+                )
+
+                db.add(entity)
+                db.flush()  # Flush to get the entity.id without committing
+                entity_id_map[entity_data["entity_name"]] = entity.id
+
+            # Save extracted relationships
+            saved_relationships = []
+            for rel_data in relationships_data:
+                source_name = rel_data["source_entity_name"]
+                target_name = rel_data["target_entity_name"]
+
+                # Only create relationship if both entities were saved
+                if source_name in entity_id_map and target_name in entity_id_map:
+                    relationship = Relationship(
+                        source_entity_id=entity_id_map[source_name],
+                        target_entity_id=entity_id_map[target_name],
+                        relationship_type=rel_data["relationship_type"],
+                        weight=rel_data.get("weight", 1.0),
+                        created_at=datetime.utcnow()
+                    )
+                    db.add(relationship)
+                    saved_relationships.append({
+                        "source": source_name,
+                        "target": target_name,
+                        "type": rel_data["relationship_type"]
+                    })
+
+            db.commit()
+
+            result = {
+                "success": True,
+                "conversation_id": conversation.id,
+                "message": "Conversation saved successfully",
+                "entities_extracted": len(entities_data),
+                "relationships_extracted": len(saved_relationships)
+            }
+
+        except Exception as e:
+            # If entity extraction fails, still save the conversation
+            logger.warning(f"Entity extraction failed: {e}")
+            result = {
+                "success": True,
+                "conversation_id": conversation.id,
+                "message": "Conversation saved successfully (entity extraction failed)",
+                "entities_extracted": 0,
+                "relationships_extracted": 0,
+                "extraction_error": str(e)
+            }
+
+        return JSONResponse(result)
+
+    except Exception as e:
+        logger.error(f"Error saving conversation via HTTP: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        db.close()
+
+
 # Create Starlette application
 app = Starlette(
     routes=[
         Route('/sse', handle_sse, methods=['GET']),
         Route('/health', handle_health),
+        Route('/api/save', handle_save_conversation_http, methods=['POST']),  # Hook endpoint
         # Authentication endpoints
         Route('/auth/register', handle_register, methods=['POST']),
         Route('/auth/login', handle_login, methods=['POST']),
@@ -1050,7 +1192,7 @@ def main():
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=8000,
+        port=8001,
         log_level="info",
         timeout_graceful_shutdown=10  # Wait max 10 seconds for connections to close
     )

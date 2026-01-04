@@ -146,7 +146,11 @@ class Summary(Base):
 
 
 # Database engine and session
-engine = create_engine(settings.database_url, echo=False)
+engine = create_engine(
+    settings.database_url,
+    echo=False,
+    pool_pre_ping=True,  # Verify connections before using them to prevent stale connection errors
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 

@@ -3,7 +3,7 @@
 import asyncio
 import os
 import sys
-from typing import Any
+from typing import Any, Optional
 from dotenv import load_dotenv
 
 from mcp.server import Server
@@ -22,45 +22,67 @@ AUTH_TOKEN = os.getenv("MEMHUB_AUTH_TOKEN", None)
 # Create MCP server (proxy)
 app = Server("memory-hub")
 
-# Global client session
-client_session: ClientSession = None
 
+class BackendConnection:
+    """Manages connection to the HTTP backend."""
 
-async def get_client_session() -> ClientSession:
-    """Get or create MCP client session to HTTP backend."""
-    global client_session
+    def __init__(self):
+        self._sse_client = None
+        self._session: Optional[ClientSession] = None
+        self._headers = {}
 
-    if client_session is None:
+    async def connect(self) -> ClientSession:
+        """Establish connection to HTTP backend."""
+        if self._session is not None:
+            return self._session
+
         # Prepare headers with authentication if token is provided
-        headers = {}
         if AUTH_TOKEN:
-            headers["Authorization"] = f"Bearer {AUTH_TOKEN}"
+            self._headers["Authorization"] = f"Bearer {AUTH_TOKEN}"
 
         # Connect to HTTP backend via SSE
         sse_url = f"{HTTP_SERVER_URL}/sse"
 
         try:
-            # Create SSE client connection
-            streams = await sse_client(
-                url=sse_url,
-                headers=headers
-            ).__aenter__()
+            # Use proper async context manager pattern
+            self._sse_client = sse_client(url=sse_url, headers=self._headers)
+            read_stream, write_stream = await self._sse_client.__aenter__()
 
-            # Create client session
-            client_session = ClientSession(streams[0], streams[1])
-            await client_session.__aenter__()
+            # Create and initialize client session
+            self._session = ClientSession(read_stream, write_stream)
+            await self._session.__aenter__()
+            await self._session.initialize()
 
-            # Initialize the session
-            await client_session.initialize()
-
-            print(f"Connected to HTTP backend at {HTTP_SERVER_URL}", file=sys.stderr)
+            print(f"Connected to HTTP backend at {HTTP_SERVER_URL}", file=sys.stderr, flush=True)
+            return self._session
 
         except Exception as e:
-            print(f"Failed to connect to HTTP backend: {e}", file=sys.stderr)
-            print(f"Make sure server_http.py is running on {HTTP_SERVER_URL}", file=sys.stderr)
+            print(f"Failed to connect to HTTP backend: {e}", file=sys.stderr, flush=True)
+            print(f"Make sure server_http.py is running on {HTTP_SERVER_URL}", file=sys.stderr, flush=True)
+            await self.close()
             raise
 
-    return client_session
+    async def close(self):
+        """Close the connection."""
+        try:
+            if self._session is not None:
+                await self._session.__aexit__(None, None, None)
+                self._session = None
+            if self._sse_client is not None:
+                await self._sse_client.__aexit__(None, None, None)
+                self._sse_client = None
+        except Exception:
+            # Ignore cleanup errors
+            pass
+
+
+# Global backend connection
+backend = BackendConnection()
+
+
+async def get_client_session() -> ClientSession:
+    """Get or create MCP client session to HTTP backend."""
+    return await backend.connect()
 
 
 @app.list_tools()
@@ -71,7 +93,7 @@ async def list_tools() -> list[Tool]:
         result = await session.list_tools()
         return result.tools
     except Exception as e:
-        print(f"Error listing tools: {e}", file=sys.stderr)
+        print(f"Error listing tools: {e}", file=sys.stderr, flush=True)
         return []
 
 
@@ -85,7 +107,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
     except Exception as e:
         import json
         error_msg = f"Error calling tool {name}: {e}"
-        print(error_msg, file=sys.stderr)
+        print(error_msg, file=sys.stderr, flush=True)
         return [TextContent(
             type="text",
             text=json.dumps({"error": error_msg})
@@ -100,7 +122,7 @@ async def list_resources() -> list[Resource]:
         result = await session.list_resources()
         return result.resources
     except Exception as e:
-        print(f"Error listing resources: {e}", file=sys.stderr)
+        print(f"Error listing resources: {e}", file=sys.stderr, flush=True)
         return []
 
 
@@ -122,38 +144,42 @@ async def read_resource(uri: str) -> str:
     except Exception as e:
         import json
         error_msg = f"Error reading resource {uri}: {e}"
-        print(error_msg, file=sys.stderr)
+        print(error_msg, file=sys.stderr, flush=True)
         return json.dumps({"error": error_msg})
 
 
 async def main():
     """Run the MCP proxy server."""
-    print("Memory Hub MCP Proxy Server starting...", file=sys.stderr)
-    print(f"Connecting to HTTP backend at {HTTP_SERVER_URL}", file=sys.stderr)
+    print("Memory Hub MCP Proxy Server starting...", file=sys.stderr, flush=True)
+    print(f"Connecting to HTTP backend at {HTTP_SERVER_URL}", file=sys.stderr, flush=True)
 
     if AUTH_TOKEN:
-        print("Authentication token configured", file=sys.stderr)
+        print("Authentication token configured", file=sys.stderr, flush=True)
     else:
-        print("WARNING: No authentication token configured. Set MEMHUB_AUTH_TOKEN environment variable.", file=sys.stderr)
+        print("WARNING: No authentication token configured. Set MEMHUB_AUTH_TOKEN environment variable.", file=sys.stderr, flush=True)
 
     # Run stdio server
     async with stdio_server() as (read_stream, write_stream):
-        print("Stdio server ready, connecting to backend...", file=sys.stderr)
+        print("Stdio server ready, connecting to backend...", file=sys.stderr, flush=True)
 
         # Pre-connect to backend
         try:
             await get_client_session()
-            print("Successfully connected to backend!", file=sys.stderr)
+            print("Successfully connected to backend!", file=sys.stderr, flush=True)
         except Exception as e:
-            print(f"Failed to connect to backend: {e}", file=sys.stderr)
-            print("The proxy will attempt to reconnect when needed.", file=sys.stderr)
+            print(f"Failed to connect to backend: {e}", file=sys.stderr, flush=True)
+            print("The proxy will attempt to reconnect when needed.", file=sys.stderr, flush=True)
 
-        # Run the server
-        await app.run(
-            read_stream,
-            write_stream,
-            app.create_initialization_options()
-        )
+        try:
+            # Run the server
+            await app.run(
+                read_stream,
+                write_stream,
+                app.create_initialization_options()
+            )
+        finally:
+            # Clean up backend connection
+            await backend.close()
 
 
 if __name__ == "__main__":
