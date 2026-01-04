@@ -1,6 +1,7 @@
 """Memory Hub MCP Server - HTTP/SSE Mode for Remote Access."""
 
 import json
+import os
 from typing import Any, Optional
 from datetime import datetime
 from contextvars import ContextVar
@@ -1189,10 +1190,11 @@ async def startup_event():
 
 def main():
     """Run the HTTP/SSE server."""
+    port = int(os.getenv("PORT", 8001))
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=8001,
+        port=port,
         log_level="info",
         timeout_graceful_shutdown=10  # Wait max 10 seconds for connections to close
     )
